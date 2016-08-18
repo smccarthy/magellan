@@ -27,10 +27,10 @@ var WORKER_POLL_INTERVAL = 250;
 var FINAL_CLEANUP_DELAY = 2500;
 
 var strictness = {
-  BAIL_NEVER: 1,     // never bail
+  BAIL_NEVER: 1, // never bail
   BAIL_TIME_ONLY: 2, // kill tests that run too slow early, but not the build
-  BAIL_EARLY: 3,     // bail somewhat early, but within a threshold (see below), apply time rules
-  BAIL_FAST: 4,      // bail as soon as a test fails, apply time rules
+  BAIL_EARLY: 3, // bail somewhat early, but within a threshold (see below), apply time rules
+  BAIL_FAST: 4, // bail as soon as a test fails, apply time rules
 
   // Ratio of tests that need to fail before we abandon the build in BAIL_EARLY mode
   THRESHOLD: settings.bailThreshold,
@@ -69,31 +69,23 @@ function TestRunner(tests, options) {
   // FIXME: remove these eslint disables when this is simplified and has a test
   /*eslint-disable no-nested-ternary*/
   /*eslint-disable no-extra-parens*/
-  this.strictness = options.bailFast
-    ? strictness.BAIL_FAST
-    : (options.bailOnThreshold
-      ? strictness.BAIL_EARLY
-      : (settings.bailTimeExplicitlySet
-        ? strictness.BAIL_TIME_ONLY
-        : strictness.BAIL_NEVER
-      )
-    );
+  this.strictness = options.bailFast ? strictness.BAIL_FAST : (options.bailOnThreshold ? strictness.BAIL_EARLY : (settings.bailTimeExplicitlySet ? strictness.BAIL_TIME_ONLY : strictness.BAIL_NEVER));
 
   this.MAX_WORKERS = options.maxWorkers;
 
   // Attempt tests once only if we're in fast bail mode
-  this.MAX_TEST_ATTEMPTS = this.strictness === strictness.BAIL_FAST
-    ? 1
-    : options.maxTestAttempts;
+  this.MAX_TEST_ATTEMPTS = this.strictness === strictness.BAIL_FAST ? 1 : options.maxTestAttempts;
 
   this.hasBailed = false;
 
-  this.browsers = options.browsers;
   this.debug = options.debug;
 
   this.serial = options.serial || false;
 
-  this.sauceSettings = options.sauceSettings;
+  // this.browsers = options.browsers;
+  // this.sauceSettings = options.sauceSettings;
+  // MAGELLAN@9.0.0
+  this.executor = options.executor;
 
   this.listeners = options.listeners || [];
 
@@ -104,12 +96,17 @@ function TestRunner(tests, options) {
 
   // For each actual test path, split out
   this.tests = _.flatten(tests.map(function (testLocator) {
-    return options.browsers.map(function (requestedBrowser) {
-      // Note: For non-sauce browsers, this can come back empty, which is just fine.
-      var sauceBrowserSettings = sauceBrowsers.browser(requestedBrowser.browserId,
-        requestedBrowser.resolution, requestedBrowser.orientation);
-      return new Test(testLocator, requestedBrowser, sauceBrowserSettings, self.MAX_TEST_ATTEMPTS);
+    // return options.browsers.map(function (requestedBrowser) {
+    //   // Note: For non-sauce browsers, this can come back empty, which is just fine.
+    //   var sauceBrowserSettings = sauceBrowsers.browser(requestedBrowser.browserId,
+    //     requestedBrowser.resolution, requestedBrowser.orientation);
+    //   return new Test(testLocator, requestedBrowser, sauceBrowserSettings, self.MAX_TEST_ATTEMPTS);
+    // });
+    // MAGELLAN@9.0.0
+    return self.executor.environments.map(function (env) {
+      return new Test(testLocator, env, self.MAX_TEST_ATTEMPTS);
     });
+
   }));
 
   if (settings.gatherTrends) {
@@ -136,14 +133,16 @@ TestRunner.prototype = {
   start: function () {
     this.startTime = (new Date()).getTime();
 
-    var browserStatement = " with ";
-    browserStatement += this.browsers.map(function (b) { return b.toString(); }).join(", ");
+    var environmentStatement = " with ";
+    // MAGELLAN@9.0.0
+    environmentStatement += this.executor.environments.map(function (env) {
+      return env.toString();
+    }).join(", ");
 
     if (this.serial) {
-      console.log("\nRunning " + this.numTests + " tests in serial mode" + browserStatement + "\n");
+      console.log("\nRunning " + this.numTests + " tests in serial mode" + environmentStatement + "\n");
     } else {
-      console.log("\nRunning " + this.numTests + " tests with " + this.MAX_WORKERS
-        + " workers" + browserStatement + "\n");
+      console.log("\nRunning " + this.numTests + " tests with " + this.MAX_WORKERS + " workers" + environmentStatement + "\n");
     }
 
     if (this.tests.length === 0) {
@@ -320,7 +319,7 @@ TestRunner.prototype = {
 
         metadata: {
           test: test.locator.toString(),
-          browser: test.browser.browserId,
+          browser: test.env.browser,
           // NOTE: attempt numbers are 1-indexed
           attemptNumber: (test.attempts + 1)
         }
@@ -475,8 +474,7 @@ TestRunner.prototype = {
         // Tell the child to shut down the running test immediately
         childProcess.send({
           signal: "bail",
-          customMessage: "Killed by magellan after " + strictness.LONG_RUNNING_TEST
-            + "ms (long running test)"
+          customMessage: "Killed by magellan after " + strictness.LONG_RUNNING_TEST + "ms (long running test)"
         });
 
         setTimeout(function () {
@@ -501,6 +499,7 @@ TestRunner.prototype = {
       msg.push("-->");
       msg.push((this.serial ? "Serial mode" : "Worker " + worker.index) + ",");
 
+      // MAGELLAN@9.0.0: remove this to SAUCE-EXECUTOR
       if (this.sauceSettings && worker.tunnelId) {
         msg.push("tunnel id: " + worker.tunnelId + ",");
       }
@@ -523,8 +522,7 @@ TestRunner.prototype = {
       var childBuildId = guid();
 
       // Note: we must sanitize the buildid because it might contain slashes or "..", etc
-      var tempAssetPath = path.resolve(settings.tempDir + "/build-"
-        + sanitizeFilename(this.buildId) + "_" + childBuildId + "__temp_assets");
+      var tempAssetPath = path.resolve(settings.tempDir + "/build-" + sanitizeFilename(this.buildId) + "_" + childBuildId + "__temp_assets");
 
       mkdirSync(tempAssetPath);
 
@@ -542,19 +540,21 @@ TestRunner.prototype = {
         // NOTE: This must appear as an externally accessible property on the TestRun instance
         tempAssetPath: tempAssetPath,
 
-        // Magellan environment id (i.e. id of browser, id of device, version, etc.),
-        // typically reflects one of the items from --browsers=item1,item2,item3 options
-        environmentId: test.browser.browserId,
-
         // The locator object originally generated by the plugin itself
         locator: test.locator,
 
         seleniumPort: worker.portOffset + 1,
         mockingPort: worker.portOffset,
 
-        tunnelId: worker.tunnelId,
-        sauceSettings: this.sauceSettings,
-        sauceBrowserSettings: test.sauceBrowserSettings
+        // MAGELLAN@9.0.0
+        env: test.env
+          // // Magellan environment id (i.e. id of browser, id of device, version, etc.),
+          // // typically reflects one of the items from --browsers=item1,item2,item3 options
+          // environmentId: test.browser.browserId,
+
+        // tunnelId: worker.tunnelId,
+        // sauceSettings: this.sauceSettings,
+        // sauceBrowserSettings: test.sauceBrowserSettings
       });
     } catch (e) {
       deferred.reject(e);
@@ -562,7 +562,10 @@ TestRunner.prototype = {
 
     if (testRun) {
       setTimeout(function () {
-        this.spawnTestProcess(testRun, test)
+        // this.spawnTestProcess(testRun, test)
+        //   .then(deferred.resolve)
+        //   .catch(deferred.reject);
+        self.executor.execute(testRun, test)
           .then(deferred.resolve)
           .catch(deferred.reject);
       }.bind(this), WORKER_START_DELAY);
@@ -581,14 +584,13 @@ TestRunner.prototype = {
       try {
         existingTrends = JSON.parse(fs.readFileSync("./trends.json"));
       } catch (e) {
-        existingTrends = {failures: {}};
+        existingTrends = { failures: {} };
       }
 
       Object.keys(this.trends.failures).forEach(function (key) {
         var localFailureCount = self.trends.failures[key];
         /*eslint-disable no-magic-numbers*/
-        existingTrends.failures[key] = existingTrends.failures[key] > -1
-          ? existingTrends.failures[key] + localFailureCount : localFailureCount;
+        existingTrends.failures[key] = existingTrends.failures[key] > -1 ? existingTrends.failures[key] + localFailureCount : localFailureCount;
       });
 
       fs.writeFileSync("./trends.json", JSON.stringify(existingTrends, null, 2));
@@ -601,8 +603,7 @@ TestRunner.prototype = {
     console.log(clc.redBright("\n============= Failed Tests:  =============\n"));
 
     this.failedTests.forEach(function (failedTest) {
-      console.log("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
-        + " - - - - - - - - - - - - - - - ");
+      console.log("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -" + " - - - - - - - - - - - - - - - ");
       console.log("Failed Test: " + failedTest.toString());
       console.log(" # attempts: " + failedTest.attempts);
       console.log("     output: ");
@@ -723,8 +724,7 @@ TestRunner.prototype = {
     if (this.hasBailed) {
       // Ignore results from this test if we've bailed. This is likely a test that
       // was killed when the build went into bail mode.
-      console.log("\u2716 " + clc.redBright("KILLED ") + " " + test.toString()
-        + (this.serial ? "\n" : ""));
+      console.log("\u2716 " + clc.redBright("KILLED ") + " " + test.toString() + (this.serial ? "\n" : ""));
       return;
     }
 
@@ -741,8 +741,7 @@ TestRunner.prototype = {
       if (settings.gatherTrends) {
         var key = test.toString();
         /*eslint-disable no-magic-numbers*/
-        this.trends.failures[key] = this.trends.failures[key] > -1
-          ? this.trends.failures[key] + 1 : 1;
+        this.trends.failures[key] = this.trends.failures[key] > -1 ? this.trends.failures[key] + 1 : 1;
       }
 
       /*eslint-disable no-magic-numbers*/
@@ -763,20 +762,15 @@ TestRunner.prototype = {
     var suffix;
 
     if (this.serial) {
-      prefix = "\n(" + (this.passedTests.length + this.failedTests.length) + " / "
-        + this.numTests + ")";
+      prefix = "\n(" + (this.passedTests.length + this.failedTests.length) + " / " + this.numTests + ")";
       suffix = "\n";
     } else {
-      prefix = "(" + (this.passedTests.length + this.failedTests.length) + " / "
-        + this.numTests + ") <-- Worker " + test.workerIndex;
+      prefix = "(" + (this.passedTests.length + this.failedTests.length) + " / " + this.numTests + ") <-- Worker " + test.workerIndex;
       suffix = "";
     }
 
-    var requeueNote = testRequeued ? clc.cyanBright("(will retry).  Spent "
-        + test.getRuntime() + " msec") : "";
-    console.log(prefix + " "
-      + (successful ? clc.greenBright("PASS ") : clc.redBright("FAIL ")) + requeueNote + " "
-      + test.toString() + " " + suffix);
+    var requeueNote = testRequeued ? clc.cyanBright("(will retry).  Spent " + test.getRuntime() + " msec") : "";
+    console.log(prefix + " " + (successful ? clc.greenBright("PASS ") : clc.redBright("FAIL ")) + requeueNote + " " + test.toString() + " " + suffix);
 
     this.checkBuild();
   },
@@ -799,8 +793,7 @@ TestRunner.prototype = {
 
   // Return true if this build should stop running and fail immediately.
   shouldBail: function () {
-    if (this.strictness === strictness.BAIL_NEVER
-      || this.strictness === strictness.BAIL_TIME_ONLY) {
+    if (this.strictness === strictness.BAIL_NEVER || this.strictness === strictness.BAIL_TIME_ONLY) {
       // BAIL_NEVER means we don't apply any strictness rules at all
       return false;
     } else if (this.strictness === strictness.BAIL_EARLY) {
@@ -810,26 +803,24 @@ TestRunner.prototype = {
       // This allows for useful data-gathering for debugging or trend
       // analysis if we don't want to just bail on the first failed test.
 
-      var sumAttempts = function (memo, test) { return memo + test.attempts; };
-      var totalAttempts = _.reduce(this.passedTests, sumAttempts, 0)
-        + _.reduce(this.failedTests, sumAttempts, 0);
+      var sumAttempts = function (memo, test) {
+        return memo + test.attempts;
+      };
+      var totalAttempts = _.reduce(this.passedTests, sumAttempts, 0) + _.reduce(this.failedTests, sumAttempts, 0);
 
       // Failed attempts are not just the sum of all failed attempts but also
       // of successful tests that eventually passed (i.e. total attempts - 1).
       var sumExtraAttempts = function (memo, test) {
         return memo + Math.max(test.attempts - 1, 0);
       };
-      var failedAttempts = _.reduce(this.failedTests, sumAttempts, 0)
-        + _.reduce(this.passedTests, sumExtraAttempts, 0);
+      var failedAttempts = _.reduce(this.failedTests, sumAttempts, 0) + _.reduce(this.passedTests, sumExtraAttempts, 0);
 
       // Fail to total work ratio.
       var ratio = failedAttempts / totalAttempts;
 
       if (totalAttempts > strictness.THRESHOLD_MIN_ATTEMPTS) {
         if (ratio > strictness.THRESHOLD) {
-          console.log("Magellan has seen at least " + (strictness.THRESHOLD * 100) + "% of "
-            + " tests fail after seeing at least " + strictness.THRESHOLD_MIN_ATTEMPTS
-            + " tests run. Bailing early.");
+          console.log("Magellan has seen at least " + (strictness.THRESHOLD * 100) + "% of " + " tests fail after seeing at least " + strictness.THRESHOLD_MIN_ATTEMPTS + " tests run. Bailing early.");
           return true;
         }
       }

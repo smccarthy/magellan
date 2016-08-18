@@ -4,7 +4,8 @@ var TEST_STATUS_NEW = 1;
 var TEST_STATUS_FAILED = 2;
 var TEST_STATUS_SUCCESSFUL = 3;
 
-function Test(locator, browser, sauceBrowserSettings, maxAttempts) {
+// MAGELLAN@9.0.0
+function Test(locator, env, maxAttempts) {
   //
   // note: this locator object is an instance of an object which is defined by whichever test
   // framework plugin is currently loaded. The implementation of locator could be almost any
@@ -17,14 +18,15 @@ function Test(locator, browser, sauceBrowserSettings, maxAttempts) {
   this.attempts = 0;
   this.status = TEST_STATUS_NEW;
 
-  this.browser = browser;
-
   this.workerIndex = -1;
   this.error = undefined;
   this.stdout = "";
   this.stderr = "";
 
-  this.sauceBrowserSettings = sauceBrowserSettings;
+  // MAGELLAN@9.0.0
+  // this.browser = browser;
+  // this.sauceBrowserSettings = sauceBrowserSettings;
+  this.env = env;
 }
 
 // Return true if we've either:
@@ -57,9 +59,7 @@ Test.prototype.stopClock = function () {
 
 // return an unambiguous representation of this test: path, browserId, resolution, orientation
 Test.prototype.toString = function () {
-  return this.locator.toString() + " @" + this.browser.browserId
-    + " " + (this.browser.resolution ? "res:" + this.browser.resolution : "")
-    + (this.browser.orientation ? "orientation:" + this.browser.orientation : "");
+  return this.locator.toString() + this.env.toString();
 };
 
 Test.prototype.getRuntime = function () {

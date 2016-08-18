@@ -83,6 +83,6 @@ module.exports = {
   buildId: buildId,
 
   framework: argv.framework || "nightwatch",
-
+  executor: argv.executor || "magellan-local-executor", 
   customSauceBrowsers: argv.customSauceBrowsers || []
 };

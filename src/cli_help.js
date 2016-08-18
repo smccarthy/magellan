@@ -42,33 +42,39 @@ module.exports = {
     console.log("  --shared_sauce_parent_account  Specify parent account name if existing shared secure tunnel is in use (for use with --sauce only, exclusive with --create_tunnels)");
     console.log("  --profile=p1,p2,..             Specify lists of browsers to use defined in profiles in magellan.json config.");
     console.log("  --profile=http://abc/p#p1,p2   Use profiles p1 and p2 hosted at JSON file http://abc/p (see README for details).");
+    
+    var truncateHelp = function (addon) {
+      var help = addon.help;
 
-    var help;
+      if (help) {
+        console.log("");
+        console.log(" Addon-specific (" + (addon.name || settings.framework) + "):");
+        var maxWidth = 31;
+
+        Object.keys(help).forEach(function (key) {
+          var str = "  --" + key;
+          if (help[key].example) {
+            str += "=" + help[key].example;
+          }
+          // pad
+          while (str.length < maxWidth) {
+            str += " ";
+          }
+          // truncate just in case the example was too long to begin with
+          str = str.substr(0, maxWidth);
+          str += help[key].description;
+          console.log(str);
+        });
+      }
+    }
 
     if (settings.testFramework && settings.testFramework.help) {
-      help = settings.testFramework.help;
+      truncateHelp(settings.testFramework);
+    }
+    if (settings.testExecutor && settings.testExecutor.help) {
+      truncateHelp(settings.testExecutor);
     }
 
-    if (help) {
-      console.log("");
-      console.log(" Framework-specific (" + settings.framework + "):");
-      var maxWidth = 31;
-
-      Object.keys(help).forEach(function (key) {
-        var str = "  --" + key;
-        if (help[key].example) {
-          str += "=" + help[key].example;
-        }
-        // pad
-        while (str.length < maxWidth) {
-          str += " ";
-        }
-        // truncate just in case the example was too long to begin with
-        str = str.substr(0, maxWidth);
-        str += help[key].description;
-        console.log(str);
-      });
-    }
 
     console.log("");
     console.log("  +------------------------------------------+-----------+-------------------+");

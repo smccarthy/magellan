@@ -13,25 +13,28 @@ var WORKER_START_DELAY = 1000;
 // Create a worker allocator for MAX_WORKERS workers. Note that the allocator
 // is not obliged to honor the creation of MAX_WORKERS, just some number of workers
 // between 0 and MAX_WORKERS.
-function Allocator(MAX_WORKERS) {
+function Allocator(options) {
   if (settings.debug) {
     console.log("Worker Allocator starting.");
     console.log("Port allocation range from: " + settings.BASE_PORT_START + " to "
       + (settings.BASE_PORT_START + settings.BASE_PORT_RANGE - 1) + " with "
       + settings.BASE_PORT_SPACING + " ports available to each worker.");
   }
-
-  this.initializeWorkers(MAX_WORKERS);
+  
+  this.extension = options.extension;
+  this.initializeWorkers(options.workers);
 }
 
 Allocator.prototype = {
 
   initialize: function (callback) {
-    callback();
+    this.extension.initialize(callback);
+    // callback();
   },
 
   teardown: function (callback) {
-    callback();
+    this.extension.teardown(callback);
+    // callback();
   },
 
   initializeWorkers: function (numWorkers) {
@@ -119,6 +122,7 @@ Allocator.prototype = {
   },
 
   release: function (worker) {
+    this.extension.release(worker);
     worker.occupied = false;
   }
 
