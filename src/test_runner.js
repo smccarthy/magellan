@@ -95,7 +95,7 @@ function TestRunner(tests, options) {
   this.allocator = options.allocator;
 
   // For each actual test path, split out
-  this.tests = _.flatten(tests.map(function (testLocator) {
+  this.tests = _.flatten(tests.map(function(testLocator) {
     // return options.browsers.map(function (requestedBrowser) {
     //   // Note: For non-sauce browsers, this can come back empty, which is just fine.
     //   var sauceBrowserSettings = sauceBrowsers.browser(requestedBrowser.browserId,
@@ -103,7 +103,7 @@ function TestRunner(tests, options) {
     //   return new Test(testLocator, requestedBrowser, sauceBrowserSettings, self.MAX_TEST_ATTEMPTS);
     // });
     // MAGELLAN@9.0.0
-    return self.executor.environments.map(function (env) {
+    return self.executor.environments.map(function(env) {
       return new Test(testLocator, env, self.MAX_TEST_ATTEMPTS);
     });
 
@@ -130,12 +130,12 @@ function TestRunner(tests, options) {
 
 TestRunner.prototype = {
 
-  start: function () {
+  start: function() {
     this.startTime = (new Date()).getTime();
 
     var environmentStatement = " with ";
     // MAGELLAN@9.0.0
-    environmentStatement += this.executor.environments.map(function (env) {
+    environmentStatement += this.executor.environments.map(function(env) {
       return env.toString();
     }).join(", ");
 
@@ -150,13 +150,13 @@ TestRunner.prototype = {
     } else {
       // Queue up tests; this will cause them to actually start
       // running immediately.
-      this.tests.forEach(function (test) {
+      this.tests.forEach(function(test) {
         this.q.push(test, this.onTestComplete.bind(this));
       }.bind(this));
     }
   },
 
-  notIdle: function () {
+  notIdle: function() {
     this.busyCount++;
 
     if (this.busyCount === 1) {
@@ -165,7 +165,7 @@ TestRunner.prototype = {
     }
   },
 
-  maybeIdle: function () {
+  maybeIdle: function() {
     this.busyCount--;
 
     if (this.busyCount === 0) {
@@ -175,18 +175,18 @@ TestRunner.prototype = {
   },
 
   // Prepare a test to be run. Find a worker for the test and send it off to be run.
-  stageTest: function (test, onTestComplete) {
+  stageTest: function(test, onTestComplete) {
     var self = this;
     var analyticsGuid = guid();
 
     analytics.push("acquire-worker-" + analyticsGuid);
 
-    this.allocator.get(function (error, worker) {
+    this.allocator.get(function(error, worker) {
       if (!error) {
         analytics.mark("acquire-worker-" + analyticsGuid);
 
         this.runTest(test, worker)
-          .then(function (runResults) {
+          .then(function(runResults) {
             // Give this worker back to the allocator
             self.allocator.release(worker);
 
@@ -204,7 +204,7 @@ TestRunner.prototype = {
 
             onTestComplete(null, test);
           })
-          .catch(function (runTestError) {
+          .catch(function(runTestError) {
             // Catch a testing infrastructure error unrelated to the test itself failing.
             // This indicates something went wrong with magellan itself. We still need
             // to drain the queue, so we fail the test, even though the test itself may
@@ -243,253 +243,10 @@ TestRunner.prototype = {
     }.bind(this));
   },
 
-  // Spawn a process for a given test run
-  // Return a promise that resolves with test results after test has been run.
-  // Rejections only happen if we encounter a problem with magellan itself, not
-  // the test. The test will resolve with a test result whether it fails or passes.
-  spawnTestProcess: function (testRun, test) {
-    var deferred = Q.defer();
-    var self = this;
-
-    var env;
-    try {
-      env = testRun.getEnvironment(settings.environment);
-    } catch (e) {
-      deferred.reject(e);
-      return deferred.promise;
-    }
-
-    var options = {
-      env: env,
-      silent: true,
-      detached: false,
-      stdio: ["pipe", "pipe", "pipe", "ipc"]
-    };
-
-    var childProcess;
-    try {
-      childProcess = fork(testRun.getCommand(), testRun.getArguments(), options);
-      this.notIdle();
-    } catch (e) {
-      deferred.reject(e);
-      return deferred.promise;
-    }
-
-    // Simulate some of the aspects of a node process by adding stdout and stderr streams
-    // that can be used by listeners and reporters.
-    var statusEmitter = new EventEmitter();
-    statusEmitter.stdout = childProcess.stdout;
-    statusEmitter.stderr = childProcess.stderr;
-
-    var sentry;
-
-    var seleniumSessionId;
-    var stdout = clc.greenBright(logStamp()) + " Magellan child process start\n\n";
-    var stderr = "";
-
-    try {
-      // Attach listeners that respond to messages sent from the running test.
-      // These messages are sent with process.send()
-      this.listeners.forEach(function (listener) {
-        if (listener.listenTo) {
-          listener.listenTo(testRun, test, statusEmitter);
-        }
-      });
-
-      statusEmitter.emit("message", {
-        type: "worker-status",
-        status: "started",
-        name: test.locator.toString()
-      });
-
-    } catch (e) {
-      deferred.reject(e);
-      return deferred.promise;
-    }
-
-    statusEmitter.emit("message", {
-      type: "analytics-event",
-      data: {
-        name: "test-run-" + testRun.guid,
-
-        markers: [{
-          name: "start",
-          t: Date.now()
-        }],
-
-        metadata: {
-          test: test.locator.toString(),
-          browser: test.env.browser,
-          // NOTE: attempt numbers are 1-indexed
-          attemptNumber: (test.attempts + 1)
-        }
-      }
-    });
-
-    // Note: There are three ways a process can die:
-    //
-    //   1. "close" emitted.
-    //   2. "exit" emitted.
-    //   3. direct call of workerClosed(), with a kill of the process tree.
-    //
-    // Because "close" emits unpredictably some time after we fulfill case
-    // #3, we wrap this callback in once() so that we only clean up once.
-    var workerClosed = once(function (code) {
-      self.maybeIdle();
-
-      statusEmitter.emit("message", {
-        type: "analytics-event-mark",
-        eventName: "test-run-" + testRun.guid,
-        data: {
-          name: code === 0 ? "passed" : "failed",
-          t: Date.now()
-        }
-      });
-
-      test.stopClock();
-      clearInterval(sentry);
-
-      statusEmitter.emit("message", {
-        type: "worker-status",
-        status: "finished",
-        name: test.locator.toString(),
-        passed: code === 0,
-        metadata: {
-          //
-          // TODO: move the generation of this resultURL to sauce support modules
-          // TODO: leave it open to have result URLs for anything including non-sauce tests
-          //       right now this is directly tied to sauce since sauce is the only thing that
-          //       generates a resultURL, but in the future, we may have resultURLs that
-          //       originate from somewhere else.
-          //
-          resultURL: "https://saucelabs.com/tests/" + seleniumSessionId
-        }
-      });
-
-      // Detach ALL listeners that may have been attached
-      childProcess.stdout.removeAllListeners();
-      childProcess.stderr.removeAllListeners();
-      childProcess.stdout.unpipe();
-      childProcess.stderr.unpipe();
-      childProcess.removeAllListeners();
-
-      statusEmitter.stdout = null;
-      statusEmitter.stderr = null;
-
-      // Resolve the promise
-      deferred.resolve({
-        error: (code === 0) ? null : "Child test run process exited with code " + code,
-        stderr: stderr,
-        stdout: stdout
-      });
-    }).bind(this);
-
-    if (this.debug) {
-      // For debugging purposes.
-      childProcess.on("message", function (msg) {
-        console.log("Message from worker:", msg);
-      });
-    }
-
-    //
-    // Via IPC, capture the current selenium session id.
-    // Reporters and listeners can exploit this to tie certain runtime artifacts to the unique
-    // identity of the test run.
-    //
-    // FIXME: make it possible to receive this information from test frameworks not based on nodejs
-    //
-    childProcess.on("message", function (message) {
-      if (message.type === "selenium-session-info") {
-        seleniumSessionId = message.sessionId;
-      }
-    });
-
-    childProcess.stdout.on("data", function (data) {
-      var text = ("" + data);
-      if (text.trim() !== "") {
-        text = text
-          .split("\n")
-          .filter(function (line) {
-            return line.trim() !== "" || line.indexOf("\n") > -1;
-          })
-          .map(function (line) {
-            // NOTE: since this comes from stdout, color the stamps green
-            return clc.greenBright(logStamp()) + " " + line;
-          })
-          .join("\n");
-
-        if (text.length > 0) {
-          stdout += text + "\n";
-        } else {
-          stdout += "\n";
-        }
-      }
-    });
-
-    childProcess.stderr.on("data", function (data) {
-      var text = ("" + data);
-      if (text.trim() !== "") {
-        text = text
-          .split("\n")
-          .filter(function (line) {
-            return line.trim() !== "" || line.indexOf("\n") > -1;
-          })
-          .map(function (line) {
-            // NOTE: since this comes from stderr, color the stamps red
-            return clc.redBright(logStamp()) + " " + line;
-          })
-          .join("\n");
-
-        if (text.length > 0) {
-          stdout += text + "\n";
-        } else {
-          stdout += "\n";
-        }
-      }
-    });
-
-    childProcess.on("close", workerClosed);
-
-    // A sentry monitors how long a given worker has been working. In every
-    // strictness level except BAIL_NEVER, we kill a worker process and its
-    // process tree if its been running for too long.
-    test.startClock();
-    sentry = setInterval(function () {
-      if (this.strictness === strictness.BAIL_NEVER) {
-        return;
-      }
-
-      var runtime = test.getRuntime();
-
-      // Kill a running test under one of two conditions:
-      //   1. We've been asked to bail with this.hasBailed
-      //   2. the runtime for this test exceeds the limit.
-      //
-      if (this.hasBailed || runtime > strictness.LONG_RUNNING_TEST) {
-        // Stop the sentry now because we are going to yield for a moment before
-        // calling workerClosed(), which is normally responsible for stopping
-        // the sentry from monitoring.
-        clearInterval(sentry);
-
-        // Tell the child to shut down the running test immediately
-        childProcess.send({
-          signal: "bail",
-          customMessage: "Killed by magellan after " + strictness.LONG_RUNNING_TEST + "ms (long running test)"
-        });
-
-        setTimeout(function () {
-          // We pass code 1 to simulate a failure return code from fork()
-          workerClosed(1);
-        }, WORKER_STOP_DELAY);
-      }
-    }.bind(this), WORKER_POLL_INTERVAL);
-
-    return deferred.promise;
-  },
-
   // Run a test with a given worker.
   // with a modified version of the test that contains its run status
-  runTest: function (test, worker) {
+  runTest: function(test, worker) {
+    var self = this;
     var deferred = Q.defer();
 
     // do not report test starts if we've bailed.
@@ -561,20 +318,137 @@ TestRunner.prototype = {
     }
 
     if (testRun) {
-      setTimeout(function () {
-        // this.spawnTestProcess(testRun, test)
-        //   .then(deferred.resolve)
-        //   .catch(deferred.reject);
-        self.executor.execute(testRun, test)
+
+      // MAGELLAN@9.0.0
+      var testObject = _.merge({}, test, testRun);
+      var testOptions = {
+        statusEmitter: new EventEmitter(),
+        listeners: this.listeners,
+        strictness: strictness
+      };
+
+
+      setTimeout(function() {
+        this.executor
+          .spawnProcess(testObject, testOptions)
+          .then(function(executor) {
+            self.notIdle();
+            // setup all the listeners
+            var deferred = Q.defer();
+            try {
+              // Attach listeners that respond to messages sent from the running test.
+              // These messages are sent with process.send()
+              self.listeners.forEach(function(listener) {
+                if (listener.listenTo) {
+                  listener.listenTo(testRun, test, executor.statusEmitter);
+                }
+              });
+              deferred.resolve(executor)
+            } catch (e) {
+              deferred.reject(e);
+            } finally {
+              return deferred.promise;
+            }
+
+          })
+          .then(function(executor) {
+            var deferred = Q.defer();
+            executor.statusEmitter.emit("message", {
+              type: "worker-status",
+              status: "started",
+              name: test.locator.toString()
+            });
+
+            executor.statusEmitter.emit("message", {
+              type: "analytics-event",
+              data: {
+                name: "test-run-" + testRun.guid,
+
+                markers: [{
+                  name: "start",
+                  t: Date.now()
+                }],
+
+                metadata: {
+                  test: test.locator.toString(),
+                  browser: test.env.browser,
+                  // NOTE: attempt numbers are 1-indexed
+                  attemptNumber: (test.attempts + 1)
+                }
+              }
+            });
+            deferred.resolve(executor);
+            return deferred.promise;
+          })
+          .then(function(executor) {
+            var deferred = Q.defer();
+            // setup close event
+            executor.childProcess.on("close", function(code) {
+              executor.code = code;
+              deferred.resolve(executor)
+            });
+            return deferred.promise;
+          })
+          .then(function(executor) {
+            var deferred = Q.defer();
+            self.maybeIdle();
+
+            executor.statusEmitter.emit("message", {
+              type: "analytics-event-mark",
+              eventName: "test-run-" + testRun.guid,
+              data: {
+                name: executor.code === 0 ? "passed" : "failed",
+                t: Date.now()
+              }
+            });
+
+            test.stopClock();
+            // clearInterval(sentry);
+
+            executor.statusEmitter.emit("message", {
+              type: "worker-status",
+              status: "finished",
+              name: test.locator.toString(),
+              passed: executor.code === 0,
+              metadata: {
+                //
+                // TODO: move the generation of this resultURL to sauce support modules
+                // TODO: leave it open to have result URLs for anything including non-sauce tests
+                //       right now this is directly tied to sauce since sauce is the only thing that
+                //       generates a resultURL, but in the future, we may have resultURLs that
+                //       originate from somewhere else.
+                //
+                // resultURL: "https://saucelabs.com/tests/" + seleniumSessionId
+              }
+            });
+
+            // Detach ALL listeners that may have been attached
+            executor.childProcess.stdout.removeAllListeners();
+            executor.childProcess.stderr.removeAllListeners();
+            executor.childProcess.stdout.unpipe();
+            executor.childProcess.stderr.unpipe();
+            executor.childProcess.removeAllListeners();
+
+            executor.statusEmitter.stdout = null;
+            executor.statusEmitter.stderr = null;
+
+            deferred.resolve({
+              error: (executor.code === 0) ? null : "Child test run process exited with code " + executor.code,
+              stderr: executor.stderr,
+              stdout: executor.stdout
+            });
+            return deferred.promise;
+          })
           .then(deferred.resolve)
           .catch(deferred.reject);
+
       }.bind(this), WORKER_START_DELAY);
     }
 
     return deferred.promise;
   },
 
-  gatherTrends: function () {
+  gatherTrends: function() {
     if (settings.gatherTrends) {
       console.log("Updating trends ...");
 
@@ -587,7 +461,7 @@ TestRunner.prototype = {
         existingTrends = { failures: {} };
       }
 
-      Object.keys(this.trends.failures).forEach(function (key) {
+      Object.keys(this.trends.failures).forEach(function(key) {
         var localFailureCount = self.trends.failures[key];
         /*eslint-disable no-magic-numbers*/
         existingTrends.failures[key] = existingTrends.failures[key] > -1 ? existingTrends.failures[key] + localFailureCount : localFailureCount;
@@ -599,10 +473,10 @@ TestRunner.prototype = {
     }
   },
 
-  logFailedTests: function () {
+  logFailedTests: function() {
     console.log(clc.redBright("\n============= Failed Tests:  =============\n"));
 
-    this.failedTests.forEach(function (failedTest) {
+    this.failedTests.forEach(function(failedTest) {
       console.log("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -" + " - - - - - - - - - - - - - - - ");
       console.log("Failed Test: " + failedTest.toString());
       console.log(" # attempts: " + failedTest.attempts);
@@ -614,7 +488,7 @@ TestRunner.prototype = {
 
   // Print information about a completed build to the screen, showing failures and
   // bringing in any information from listeners
-  summarizeCompletedBuild: function () {
+  summarizeCompletedBuild: function() {
     var deferred = Q.defer();
 
     var retryMetrics = {};
@@ -639,7 +513,7 @@ TestRunner.prototype = {
       analytics.mark("magellan-run", "passed");
     }
 
-    this.tests.forEach(function (test) {
+    this.tests.forEach(function(test) {
       if (test.status === 3 && test.getRetries() > 0) {
         if (retryMetrics[test.getRetries()]) {
           retryMetrics[test.getRetries()]++;
@@ -655,7 +529,7 @@ TestRunner.prototype = {
     console.log("Total tests: " + this.numTests);
     console.log(" Successful: " + this.passedTests.length + " / " + this.numTests);
 
-    _.forOwn(retryMetrics, function (testCount, numRetries) {
+    _.forOwn(retryMetrics, function(testCount, numRetries) {
       console.log(testCount + " test(s) have retried: " + numRetries + " time(s)");
     });
 
@@ -668,7 +542,7 @@ TestRunner.prototype = {
       console.log("    Skipped: " + skipped);
     }
 
-    var flushNextListener = function () {
+    var flushNextListener = function() {
       if (this.listeners.length === 0) {
         // There are no listeners left to flush. We've summarized all build reports.
         deferred.resolve();
@@ -683,7 +557,7 @@ TestRunner.prototype = {
             // This is a listener that returns a promise. Wait and then flush.
             promise
               .then(flushNextListener)
-              .catch(function (error) {
+              .catch(function(error) {
                 console.log("Error when flushing listener output: ", error);
                 flushNextListener();
               });
@@ -705,11 +579,11 @@ TestRunner.prototype = {
 
   // Handle an empty work queue:
   // Display a build summary and then either signal success or failure.
-  buildFinished: function () {
+  buildFinished: function() {
     var self = this;
 
-    setTimeout(function () {
-      self.summarizeCompletedBuild().then(function () {
+    setTimeout(function() {
+      self.summarizeCompletedBuild().then(function() {
         if (self.failedTests.length === 0) {
           self.onSuccess();
         } else {
@@ -720,7 +594,7 @@ TestRunner.prototype = {
   },
 
   // Completion callback called by async.queue when a test is completed
-  onTestComplete: function (error, test) {
+  onTestComplete: function(error, test) {
     if (this.hasBailed) {
       // Ignore results from this test if we've bailed. This is likely a test that
       // was killed when the build went into bail mode.
@@ -776,7 +650,7 @@ TestRunner.prototype = {
   },
 
   // Check to see how the build is going and optionally fail the build early.
-  checkBuild: function () {
+  checkBuild: function() {
     if (!this.hasBailed && this.shouldBail()) {
       // Kill the rest of the queue, preventing any new tests from running and shutting
       // down buildFinished
@@ -792,7 +666,7 @@ TestRunner.prototype = {
   },
 
   // Return true if this build should stop running and fail immediately.
-  shouldBail: function () {
+  shouldBail: function() {
     if (this.strictness === strictness.BAIL_NEVER || this.strictness === strictness.BAIL_TIME_ONLY) {
       // BAIL_NEVER means we don't apply any strictness rules at all
       return false;
@@ -803,14 +677,14 @@ TestRunner.prototype = {
       // This allows for useful data-gathering for debugging or trend
       // analysis if we don't want to just bail on the first failed test.
 
-      var sumAttempts = function (memo, test) {
+      var sumAttempts = function(memo, test) {
         return memo + test.attempts;
       };
       var totalAttempts = _.reduce(this.passedTests, sumAttempts, 0) + _.reduce(this.failedTests, sumAttempts, 0);
 
       // Failed attempts are not just the sum of all failed attempts but also
       // of successful tests that eventually passed (i.e. total attempts - 1).
-      var sumExtraAttempts = function (memo, test) {
+      var sumExtraAttempts = function(memo, test) {
         return memo + Math.max(test.attempts - 1, 0);
       };
       var failedAttempts = _.reduce(this.failedTests, sumAttempts, 0) + _.reduce(this.passedTests, sumExtraAttempts, 0);

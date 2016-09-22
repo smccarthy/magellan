@@ -53,7 +53,10 @@ var useSerialMode = margs.argv.serial;
 var MAX_TEST_ATTEMPTS = parseInt(margs.argv.max_test_attempts) || 3;
 var selectedBrowsers;
 var workerAllocator;
-var MAX_WORKERS;
+var MAX_WORKERS = 3;
+
+var executor;
+var executorExtension;
 
 var magellanGlobals = {
   analytics: analytics
@@ -91,24 +94,47 @@ try {
   frameworkLoadException = e;
 }
 
+
+/*
+ *  TODO MAGELLAN@9.0.0: READ ENV AND PASS IT INTO FRAMEWORK INITIALIZE() HERE
+ */
 var frameworkInitializationException;
 try {
   var pkg = require(path.join(process.cwd(), "package.json"));
 
   settings.pluginOptions = null;
-  if (settings.testFramework.getPluginOptions
-    && typeof settings.testFramework.getPluginOptions === "function") {
+  if (settings.testFramework.getPluginOptions && typeof settings.testFramework.getPluginOptions === "function") {
     // backward support
-    settings.pluginOptions
-      = settings.testFramework.getPluginOptions(
-        {
-          rootPackage: pkg,
-          rootWorkingDirectory: process.cwd()
-        });
+    settings.pluginOptions = settings.testFramework.getPluginOptions({
+      rootPackage: pkg,
+      rootWorkingDirectory: process.cwd()
+    });
   }
   settings.testFramework.initialize(margs.argv, settings.pluginOptions);
 } catch (e) {
   frameworkInitializationException = e;
+}
+
+
+/*
+ *   since MAGELLAN@9.0.0
+ *   Initialize executor
+ */
+
+var executorInitializationException;
+try {
+  // TODO MAGELLAN@9.0.0: change this silly mapping  to real string to repo mapping
+  var executorModulePath = "./node_modules/testarmada-magellan/src/executor";
+
+  settings.testExecutor = require(path.join(process.cwd(), executorModulePath));
+  var executorOptions = _.pick(margs.argv, _.keys(settings.testExecutor.help));
+
+  // to set node env
+  executorOptions.environment = settings.environment;
+  executor = new settings.testExecutor.Executor(executorOptions);
+  executorExtension = new settings.testExecutor.ExecutorExtension(executorOptions);
+} catch (e) {
+  executorInitializationException = e;
 }
 
 // Show help and exit if it's asked for
@@ -119,34 +145,30 @@ if (margs.argv.help) {
   return;
 }
 
-if (margs.argv.list_browsers) {
-  browsers.initialize(true).then(function () {
-    if (margs.argv.device_additions) {
-      browsers.addDevicesFromFile(margs.argv.device_additions);
-    }
-    browsers.listBrowsers();
-    process.exit(0); //eslint-disable-line no-process-exit
-  }).catch(function (err) {
-    console.log("Couldn't fetch browsers. Error: ", err);
-    console.log(err.stack);
-  });
-  return;
-}
+/*
+ *  TODO MAGELLAN@9.0.0: MOVE THIS INTO SAUCE-EXECUTOR
+ */
+// if (margs.argv.list_browsers) {
+//   browsers.initialize(true).then(function () {
+//     if (margs.argv.device_additions) {
+//       browsers.addDevicesFromFile(margs.argv.device_additions);
+//     }
+//     browsers.listBrowsers();
+//     process.exit(0); //eslint-disable-line no-process-exit
+//   }).catch(function (err) {
+//     console.log("Couldn't fetch browsers. Error: ", err);
+//     console.log(err.stack);
+//   });
+//   return;
+// }
 
 if (!settings.testFramework) {
   console.error(clc.redBright("Error: Could not start Magellan."));
   if (frameworkLoadException) {
-    console.error(clc.redBright("Error: Could not load the testing framework plugin '"
-      + settings.framework + "'."
-      + "\nCheck and make sure your package.json includes a module named '"
-      + settings.framework + "'."
-      + "\nIf it does not, you can remedy this by typing:"
-      + "\n\nnpm install --save " + settings.framework));
+    console.error(clc.redBright("Error: Could not load the testing framework plugin '" + settings.framework + "'." + "\nCheck and make sure your package.json includes a module named '" + settings.framework + "'." + "\nIf it does not, you can remedy this by typing:" + "\n\nnpm install --save " + settings.framework));
     console.log(frameworkLoadException);
   } else if (frameworkInitializationException) {
-    console.error(clc.redBright("Error: Could not initialize the testing framework plugin '"
-      + settings.framework + "'."
-      + "\nThis plugin was found and loaded, but an error occurred during initialization:"));
+    console.error(clc.redBright("Error: Could not initialize the testing framework plugin '" + settings.framework + "'." + "\nThis plugin was found and loaded, but an error occurred during initialization:"));
     console.log(frameworkInitializationException);
   }
 
@@ -229,7 +251,7 @@ var tests = getTests(testFilters.detectFromCLI(margs.argv));
 
 if (_.isEmpty(tests)) {
   console.log("Error: no tests found");
-  process.exit(1);  //eslint-disable-line no-process-exit
+  process.exit(1); //eslint-disable-line no-process-exit
 }
 
 var initializeListeners = function () {
@@ -251,127 +273,72 @@ var initializeListeners = function () {
   return deferred.promise;
 };
 
-var startSuite = function () {
-  var deferred = Q.defer();
+/*
+ *  TODO MAGELLAN@9.0.0: BROWSERS -> ENV
+ */
 
-  workerAllocator.initialize(function (err) {
-    if (err) {
-      console.error(clc.redBright("Could not start Magellan. Got error while initializing"
-        + " worker allocator"));
-      deferred.reject(err);
-      return;
-    }
+initializeListeners()
+  .then(function () {
+    var deferred = Q.defer();
 
-    var testRunner = new TestRunner(tests, {
-      debug: debug,
-
-      maxWorkers: MAX_WORKERS,
-
-      maxTestAttempts: MAX_TEST_ATTEMPTS,
-
-      browsers: selectedBrowsers,
-
-      listeners: listeners,
-
-      bailFast: margs.argv.bail_fast ? true : false,
-      bailOnThreshold: margs.argv.bail_early ? true : false,
-
-      serial: useSerialMode,
-
-      allocator: workerAllocator,
-
-      sauceSettings: isSauce ? sauceSettings : undefined,
-
-      onSuccess: function () {
-        workerAllocator.teardown(function () {
-          processCleanup(function () {
-            deferred.resolve();
-          });
-        });
-      },
-
-      onFailure: function (/*failedTests*/) {
-        workerAllocator.teardown(function () {
-          processCleanup(function () {
-            // Failed tests are not a failure in Magellan itself, so we pass an empty error
-            // here so that we don't confuse the user. Magellan already outputs a failure
-            // report to the screen in the case of failed tests.
-            deferred.reject(null);
-          });
-        });
-      }
+    workerAllocator = new WorkerAllocator({
+      extension: executorExtension,
+      workers: MAX_WORKERS
     });
 
-    testRunner.start();
+    workerAllocator.initialize(function (err) {
+      if (err) {
+        console.error(clc.redBright("Could not start Magellan. Got error while initializing" + " worker allocator"));
+        deferred.reject(err);
+        return;
+      }
 
-  });
+      var testRunner = new TestRunner(tests, {
+        debug: debug,
 
-  return deferred.promise;
-};
+        maxWorkers: MAX_WORKERS,
 
-browsers.initialize(isSauce)
-  .then(function () {
-    if (margs.argv.device_additions) {
-      browsers.addDevicesFromFile(margs.argv.device_additions);
-    }
+        maxTestAttempts: MAX_TEST_ATTEMPTS,
+
+        listeners: listeners,
+
+        bailFast: margs.argv.bail_fast ? true : false,
+        bailOnThreshold: margs.argv.bail_early ? true : false,
+
+        serial: useSerialMode,
+
+        allocator: workerAllocator,
+
+        // browsers: selectedBrowsers,
+        // sauceSettings: isSauce ? sauceSettings : undefined,
+        executor: executor,
+
+        onSuccess: function () {
+          workerAllocator.teardown(function () {
+            processCleanup(function () {
+              deferred.resolve();
+            });
+          });
+        },
+
+        onFailure: function ( /*failedTests*/ ) {
+          workerAllocator.teardown(function () {
+            processCleanup(function () {
+              // Failed tests are not a failure in Magellan itself, so we pass an empty error
+              // here so that we don't confuse the user. Magellan already outputs a failure
+              // report to the screen in the case of failed tests.
+              deferred.reject(null);
+            });
+          });
+        }
+      });
+
+      testRunner.start();
+
+    });
+
+    return deferred.promise;
   })
-  .then(browserOptions.detectFromCLI.bind({}, margs.argv, isSauce, isNodeBased))
-  .then(function (_selectedBrowsers) {
-    selectedBrowsers = _selectedBrowsers;
-    if (!_selectedBrowsers) {
-      // If this list comes back completely undefined, it's because we didn't
-      // get anything back from either profile lookup or the saucelabs API, which
-      // likely means we requested a browser that doesn't exist or no longer exists.
-      console.log(clc.redBright("\nError: No matching browsers have been found."
-        + "\nTo see a list of sauce browsers, use the --list_browsers option.\n"));
-      throw new Error("Invalid browser specified for Sauce support");
-    } else if (_selectedBrowsers.length === 0) {
-      console.log(clc.redBright("\nError: To use --sauce mode, you need to specify a browser."
-        + "\nTo see a list of sauce browsers, use the --list_browsers option.\n"));
-      throw new Error("No browser specified for Sauce support");
-    } else if (debug) {
-      console.log("Selected browsers: ");
-      console.log(_selectedBrowsers.map(function (b) {
-        return [
-          b.browserId,
-          b.resolution ? b.resolution : "(any resolution)",
-          b.orientation ? b.orientation : "(any orientation)"
-        ].join(" ");
-      }).join("\n"));
-    }
-  })
-  .then(function () {
-    //
-    // Worker Count:
-    // =============
-    //
-    // Non-sauce mode:
-    //   Default to 8 workers if we're running phantomjs and *only* phantomjs,
-    //                otherwise 3 if other browsers are involved
-    //   Default to 1 worker in serial mode.
-    //
-    // Sauce mode:
-    //   Default to 3 workers in parallel mode (default).
-    //   Default to 1 worker in serial mode.
-    //
-    /*eslint-disable no-extra-parens*/
-    if (isSauce) {
-      MAX_WORKERS = useSerialMode ? 1 : (parseInt(margs.argv.max_workers) || 3);
-    } else {
-      var DEFAULT_MAX_WORKERS = (selectedBrowsers.length === 1
-        && selectedBrowsers[0] === "phantomjs") ? 8 : 3;
-      MAX_WORKERS = useSerialMode ? 1 : (parseInt(margs.argv.max_workers) || DEFAULT_MAX_WORKERS);
-    }
-
-    if (isSauce) {
-      workerAllocator = new SauceWorkerAllocator(MAX_WORKERS);
-    } else {
-      workerAllocator = new WorkerAllocator(MAX_WORKERS);
-    }
-  })
-  .then(initializeListeners)
-  // NOTE: if we don't end up in catch() below, magellan exits with status code 0 naturally
-  .then(startSuite)
   .catch(function (err) {
     if (err) {
       console.error(clc.redBright("Error initializing Magellan"));
@@ -386,3 +353,81 @@ browsers.initialize(isSauce)
     // Fail the test suite or fail because of an internal crash
     process.exit(1); //eslint-disable-line no-process-exit
   });
+
+// browsers.initialize(isSauce)
+//   .then(function () {
+//     if (margs.argv.device_additions) {
+//       browsers.addDevicesFromFile(margs.argv.device_additions);
+//     }
+//   })
+//   .then(browserOptions.detectFromCLI.bind({}, margs.argv, isSauce, isNodeBased))
+//   .then(function (_selectedBrowsers) {
+//     selectedBrowsers = _selectedBrowsers;
+//     if (!_selectedBrowsers) {
+//       // If this list comes back completely undefined, it's because we didn't
+//       // get anything back from either profile lookup or the saucelabs API, which
+//       // likely means we requested a browser that doesn't exist or no longer exists.
+//       console.log(clc.redBright("\nError: No matching browsers have been found."
+//         + "\nTo see a list of sauce browsers, use the --list_browsers option.\n"));
+//       throw new Error("Invalid browser specified for Sauce support");
+//     } else if (_selectedBrowsers.length === 0) {
+//       console.log(clc.redBright("\nError: To use --sauce mode, you need to specify a browser."
+//         + "\nTo see a list of sauce browsers, use the --list_browsers option.\n"));
+//       throw new Error("No browser specified for Sauce support");
+//     } else if (debug) {
+//       console.log("Selected browsers: ");
+//       console.log(_selectedBrowsers.map(function (b) {
+//         return [
+//           b.browserId,
+//           b.resolution ? b.resolution : "(any resolution)",
+//           b.orientation ? b.orientation : "(any orientation)"
+//         ].join(" ");
+//       }).join("\n"));
+//     }
+//   })
+//   .then(function () {
+//     //
+//     // Worker Count:
+//     // =============
+//     //
+//     // Non-sauce mode:
+//     //   Default to 8 workers if we're running phantomjs and *only* phantomjs,
+//     //                otherwise 3 if other browsers are involved
+//     //   Default to 1 worker in serial mode.
+//     //
+//     // Sauce mode:
+//     //   Default to 3 workers in parallel mode (default).
+//     //   Default to 1 worker in serial mode.
+//     //
+//     /*eslint-disable no-extra-parens*/
+//     if (isSauce) {
+//       MAX_WORKERS = useSerialMode ? 1 : (parseInt(margs.argv.max_workers) || 3);
+//     } else {
+//       var DEFAULT_MAX_WORKERS = (selectedBrowsers.length === 1
+//         && selectedBrowsers[0] === "phantomjs") ? 8 : 3;
+//       MAX_WORKERS = useSerialMode ? 1 : (parseInt(margs.argv.max_workers) || DEFAULT_MAX_WORKERS);
+//     }
+
+//     if (isSauce) {
+//       workerAllocator = new SauceWorkerAllocator(MAX_WORKERS);
+//     } else {
+//       workerAllocator = new WorkerAllocator(MAX_WORKERS);
+//     }
+//   })
+//   .then(initializeListeners)
+//   // NOTE: if we don't end up in catch() below, magellan exits with status code 0 naturally
+//   .then(startSuite)
+//   .catch(function (err) {
+//     if (err) {
+//       console.error(clc.redBright("Error initializing Magellan"));
+//       console.log(clc.redBright("\nError description:"));
+//       console.error(err.toString());
+//       console.log(clc.redBright("\nError stack trace:"));
+//       console.log(err.stack);
+//     } else {
+//       // No err object means we didn't have an internal crash while setting up / tearing down
+//     }
+
+//     // Fail the test suite or fail because of an internal crash
+//     process.exit(1); //eslint-disable-line no-process-exit
+//   });
