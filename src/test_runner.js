@@ -263,7 +263,7 @@ TestRunner.prototype = {
       env: env,
       silent: true,
       detached: false,
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe", "ipc"]
     };
 
     var childProcess;
@@ -284,7 +284,7 @@ TestRunner.prototype = {
     var sentry;
 
     var seleniumSessionId;
-    var stdout = "";
+    var stdout = clc.greenBright(logStamp()) + " Magellan child process start\n\n";
     var stderr = "";
 
     try {
