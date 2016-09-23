@@ -327,11 +327,111 @@ TestRunner.prototype = {
         strictness: strictness
       };
 
+      var stdout = "";
+      var stderr = "";
 
       setTimeout(function() {
         this.executor
           .spawnProcess(testObject, testOptions)
           .then(function(executor) {
+            // start test clock
+            test.startClock();
+            // redirect output
+            executor.childProcess.stdout.on("data", function(data) {
+              var text = ("" + data);
+              if (text.trim() !== "") {
+                text = text
+                  .split("\n")
+                  .filter(function(line) {
+                    return line.trim() !== "" || line.indexOf("\n") > -1;
+                  })
+                  .map(function(line) {
+                    // NOTE: since this comes from stdout, color the stamps green
+                    return clc.greenBright(logStamp()) + " " + line;
+                  })
+                  .join("\n");
+
+                if (text.length > 0) {
+                  stdout += text + "\n";
+                } else {
+                  stdout += "\n";
+                }
+              }
+            });
+
+            executor.childProcess.stderr.on("data", function(data) {
+              var text = ("" + data);
+              if (text.trim() !== "") {
+                text = text
+                  .split("\n")
+                  .filter(function(line) {
+                    return line.trim() !== "" || line.indexOf("\n") > -1;
+                  })
+                  .map(function(line) {
+                    // NOTE: since this comes from stderr, color the stamps red
+                    return clc.redBright(logStamp()) + " " + line;
+                  })
+                  .join("\n");
+
+                if (text.length > 0) {
+                  stdout += text + "\n";
+                } else {
+                  stdout += "\n";
+                }
+              }
+            });
+
+            executor.childProcess.on("close", function(code) {
+              executor.code = code;
+            });
+
+            // poll executor status (exit code)
+            executor.finish = function() {
+              var innerDeferred = Q.defer();
+              var runtime = test.getRuntime();
+              if (self.strictness === strictness.BAIL_NEVER && executor.code !== undefined) {
+                // never bail, wait for executor.childProcess's close event
+                innerDeferred.resolve(executor);
+              } else if (self.hasBailed || runtime > strictness.LONG_RUNNING_TEST) {
+
+
+                // Kill a running test under one of two conditions:
+                //   1. We've been asked to bail with this.hasBailed
+                //   2. the runtime for this test exceeds the limit.
+                //
+                // Stop the sentry now because we are going to yield for a moment before
+                // calling workerClosed(), which is normally responsible for stopping
+                // the sentry from monitoring.
+
+                // Tell the child to shut down the running test immediately
+                executor.childProcess.send({
+                  signal: "bail",
+                  customMessage: "Killed by magellan after " + strictness.LONG_RUNNING_TEST + "ms (long running test)"
+                });
+
+                setTimeout(function() {
+                  // We pass code 1 to simulate a failure return code from fork()
+                  executor.code = 1;
+                  innerDeferred.resolve(executor);
+                }, WORKER_STOP_DELAY);
+              } else {
+
+                Q
+                  .delay(WORKER_POLL_INTERVAL)
+                  .then(function() {
+                    if (executor.code === undefined) {
+                      return executor.finish();
+                    }
+
+                    var d = Q.defer();
+                    d.resolve(executor);
+                    return d.promise;
+                  })
+                  .then(innerDeferred.resolve);
+              }
+              return innerDeferred.promise;
+            };
+
             self.notIdle();
             // setup all the listeners
             var deferred = Q.defer();
@@ -352,6 +452,7 @@ TestRunner.prototype = {
 
           })
           .then(function(executor) {
+            // start executing 
             var deferred = Q.defer();
             executor.statusEmitter.emit("message", {
               type: "worker-status",
@@ -381,16 +482,14 @@ TestRunner.prototype = {
             return deferred.promise;
           })
           .then(function(executor) {
-            var deferred = Q.defer();
-            // setup close event
-            executor.childProcess.on("close", function(code) {
-              executor.code = code;
-              deferred.resolve(executor)
-            });
-            return deferred.promise;
+            return executor.finish();
           })
           .then(function(executor) {
             var deferred = Q.defer();
+
+            // stop test clock
+            test.stopClock();
+
             self.maybeIdle();
 
             executor.statusEmitter.emit("message", {
@@ -403,7 +502,6 @@ TestRunner.prototype = {
             });
 
             test.stopClock();
-            // clearInterval(sentry);
 
             executor.statusEmitter.emit("message", {
               type: "worker-status",
@@ -434,8 +532,8 @@ TestRunner.prototype = {
 
             deferred.resolve({
               error: (executor.code === 0) ? null : "Child test run process exited with code " + executor.code,
-              stderr: executor.stderr,
-              stdout: executor.stdout
+              stderr: stderr,
+              stdout: stdout
             });
             return deferred.promise;
           })

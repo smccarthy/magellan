@@ -123,10 +123,10 @@ try {
 
 var executorInitializationException;
 try {
-  // TODO MAGELLAN@9.0.0: change this silly mapping  to real string to repo mapping
-  var executorModulePath = "./node_modules/testarmada-magellan/src/executor";
+  var executorModule = margs.argv.executor
+                        || "testarmada-magellan-local-executor";
 
-  settings.testExecutor = require(path.join(process.cwd(), executorModulePath));
+  settings.testExecutor = require(executorModule);
   var executorOptions = _.pick(margs.argv, _.keys(settings.testExecutor.help));
 
   // to set node env
