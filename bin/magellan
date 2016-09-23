@@ -53,7 +53,7 @@ var useSerialMode = margs.argv.serial;
 var MAX_TEST_ATTEMPTS = parseInt(margs.argv.max_test_attempts) || 3;
 var selectedBrowsers;
 var workerAllocator;
-var MAX_WORKERS = 3;
+var DEFAULT_MAX_WORKERS = 3;
 
 var executor;
 var executorExtension;
@@ -276,6 +276,8 @@ var initializeListeners = function () {
 /*
  *  TODO MAGELLAN@9.0.0: BROWSERS -> ENV
  */
+
+var MAX_WORKERS = useSerialMode ? 1 : (parseInt(margs.argv.max_workers) || DEFAULT_MAX_WORKERS);
 
 initializeListeners()
   .then(function () {
