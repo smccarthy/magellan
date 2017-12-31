@@ -22,6 +22,10 @@ module.exports = function (mPath, moduleIsOptional) {
       console.error(clc.redBright("Error loading a module from user configuration."));
       console.error(clc.redBright("Cannot find module: " + resolvedRequire));
       throw new Error(e);
+    } else if (e.code === "MODULE_NOT_FOUND" && moduleIsOptional === true) {
+      // Do nothing
+    } else {
+      throw new Error(e);
     }
   }
 

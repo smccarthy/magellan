@@ -597,6 +597,20 @@ TestRunner.prototype = {
     }
   },
 
+  logPassedTests: function () {
+    console.log(clc.greenBright("\n============= Passed Tests:  =============\n"));
+
+    this.passedTests.forEach(function (passedTest) {
+      console.log("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"
+        + " - - - - - - - - - - - - - - - ");
+      console.log("Passed Test: " + passedTest.toString());
+      console.log(" # attempts: " + passedTest.attempts);
+      console.log("     output: ");
+      console.log(passedTest.stdout);
+      console.log(passedTest.stderr);
+    });
+  },
+
   logFailedTests: function () {
     console.log(clc.redBright("\n============= Failed Tests:  =============\n"));
 
@@ -619,6 +633,12 @@ TestRunner.prototype = {
     var retryMetrics = {};
 
     this.gatherTrends();
+
+    if (this.debug) {
+      if (this.passedTests.length > 0) {
+        this.logPassedTests();
+      }
+    }
 
     if (this.failedTests.length > 0) {
       this.logFailedTests();
