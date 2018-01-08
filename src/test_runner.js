@@ -51,6 +51,7 @@ var strictness = {
 //   getEnvironment      - function(worker, test) that returns a key value object to use as the
 //                         process environment
 //   debug               - true/false flag for magellan debugging mode
+//   showPassedTests     - true/false flag for magellan show passed tests mode
 //   onSuccess           - function() callback
 //   onFailure           - function(failedTests) callback
 //
@@ -90,6 +91,7 @@ function TestRunner(tests, options) {
 
   this.browsers = options.browsers;
   this.debug = options.debug;
+  this.showPassedTests = options.showPassedTests;
 
   this.serial = options.serial || false;
 
@@ -634,7 +636,7 @@ TestRunner.prototype = {
 
     this.gatherTrends();
 
-    if (this.debug) {
+    if (this.showPassedTests) {
       if (this.passedTests.length > 0) {
         this.logPassedTests();
       }

@@ -21,6 +21,7 @@ module.exports = {
     console.log("  --early_bail_threshold         A decimal ratio (eg 0.25 for 25%) how many tests to fail before bail_early");
     console.log("  --early_bail_min_attempts      How many test runs to run before applying bail_early rule.");
     console.log("  --debug                        Enable debugging magellan messages (dev mode).");
+    console.log("  --show_passed_tests            Show passed tests output.");
     console.log("");
     console.log(" Configuration:");
     console.log("  --config=config-path           Specify Magellan configuration location.");

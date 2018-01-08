@@ -49,6 +49,7 @@ var isSauce = margs.argv.sauce ? true : false;
 var isNodeBased = margs.argv.framework && margs.argv.framework.indexOf("mocha") > -1;
 
 var debug = margs.argv.debug || false;
+var showPassedTests = margs.argv.show_passed_tests || false;
 var useSerialMode = margs.argv.serial;
 var MAX_TEST_ATTEMPTS = parseInt(margs.argv.max_test_attempts) || 3;
 var selectedBrowsers;
@@ -268,6 +269,7 @@ var startSuite = function () {
 
     var testRunner = new TestRunner(tests, {
       debug: debug,
+      showPassedTests: showPassedTests,
 
       maxWorkers: MAX_WORKERS,
 
